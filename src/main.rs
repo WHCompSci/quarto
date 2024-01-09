@@ -90,15 +90,24 @@ impl Racer {
 // fn reward_function() {
 //     todo!()
 // }
+#[derive(Debug, Clone, Copy)]
 enum Tile {
-    Empty,
+    Empty {
+        is_start: bool,
+        is_finish: bool,
+    },
     Wall,
-    StartFinishLine,
+
 }
+
 struct Map {
     height: usize,
     width: usize,
     tiles: Vec<Tile>,
+}
+
+impl Map {
+    fn new(height: usize, width: usize) -> Map { Map { height, width, tiles } }
 }
 
 fn train_networks(racers_per_map: usize, racers_per_generation: usize, num_generations: usize) {
@@ -111,7 +120,6 @@ fn train_networks(racers_per_map: usize, racers_per_generation: usize, num_gener
             let curr_map = Map {
                 height: 100,
                 width: 100,
-                tiles:vec![Empty; 10000],
             };
         }
         
