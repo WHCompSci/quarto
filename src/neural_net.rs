@@ -1,20 +1,8 @@
-use std::{f64::consts::FRAC_PI_2, fmt::Error, io::Empty};
 
-fn main() {
-    println!("Hello, world!");
-    let mut x = 1;
-    
-    let mut y = &mut x;
-    *y += 1;
-
-    let z = &mut y;
-    **z += 2;
-    println!("{}", *y);
-
-}
+use rand::{thread_rng, Rng};
 
 #[derive(Debug, Clone)]
-struct NeuralNet {
+pub struct NeuralNet {
     layers_widths: Vec<usize>,
     weights_widths: Vec<usize>,
     layers: Vec<Vec<f64>>,
@@ -22,7 +10,7 @@ struct NeuralNet {
 }
 
 impl NeuralNet {
-    fn new(layers_widths: Vec<usize>) -> NeuralNet {
+    pub fn new(layers_widths: Vec<usize>) -> NeuralNet {
         let layers: Vec<Vec<f64>> = layers_widths
             .iter()
             .map(|width| vec![0.0; *width])
@@ -33,18 +21,18 @@ impl NeuralNet {
         }
         let weights: Vec<Vec<f64>> = weights_widths
             .iter()
-            .map(|width| vec![0.0; *width])
+            .map(|width| vec![(); *width].iter().map(|_| thread_rng().gen_range(0.0..1.0)).collect())
             .collect();
         NeuralNet {
-            layers_widths: layers_widths,
+            layers_widths,
             weights_widths,
             layers,
             weights,
         }
     }
-    fn run(&mut self, layer_inputs: Vec<f64>) -> Result<&Vec<f64>, Error> {
+    pub fn run(&mut self, layer_inputs: Vec<f64>) -> Result<&Vec<f64>, ()> {
         match layer_inputs {
-            inputs if inputs.len() != self.layers_widths[0] => Err(Error),
+            inputs if inputs.len() != self.layers_widths[0] => Err(()),
             inputs => {
                 self.layers[0] = inputs; // set the input layer
                 for i in 1..self.layers.len() {
@@ -71,37 +59,9 @@ impl NeuralNet {
 fn relu(x: f64) -> f64 {
     x.max(0.0)
 }
-const RACER_NUM_RAYS: usize = 3;
-const RACER_FOV_ANGLE: f64 = FRAC_PI_2;
-#[derive(Debug, Clone)]
-struct Racer {
-    brain: NeuralNet,
-    pos_x: i32,
-    pos_y: i32,
-    vel_x: i32,
-    vel_y: i32,
-    score: Option<f64>,
-}
 
-impl Racer {
-    fn new() -> Self {
-        let num_input_nodes = RACER_NUM_RAYS;
-        let num_hidden_layers = 10;
-        let mut layer_widths = Vec::new();
-        // add the width of the input layer 
-        layer_widths.push(num_input_nodes);
-        //add the hidden layers and output layer (9 wide)
-        layer_widths.append(&mut vec![9; num_hidden_layers + 1]);
-        Self {
-            brain: NeuralNet::new(layer_widths),
-            pos_x: 0,
-            pos_y: 0,
-            vel_x: 0,
-            vel_y: 0,
-            score: None,
-        }
-    }
-}
+
+
 // fn reward_function() {
 //     todo!()
 // }
