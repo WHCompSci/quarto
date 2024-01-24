@@ -1,16 +1,16 @@
 use macroquad::prelude::*;
 use neural_net::NeuralNet;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 mod neural_net;
 use std::f64::consts::FRAC_PI_2;
 
-#[macroquad::main("Vector Racing")]
+#[macroquad::main("Racetrack Generator")]
 async fn main() {
-    let map = new_map(100, 100);
+    let mut map = generate_map(100, 100);
 
     loop {
         clear_background(BLACK);
-        draw_map(&map, 4.0);
+        draw_map(&map);
         next_frame().await
     }
 }
@@ -46,11 +46,7 @@ impl Racer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tile {
-    Empty { is_start: bool, is_finish: bool },
-    Wall,
-}
+
 
 struct Map {
     height: usize,
@@ -58,110 +54,191 @@ struct Map {
     tiles: Vec<Tile>,
 }
 
-fn new_map(height: usize, width: usize) -> Map {
-    let tiles = vec![
-        Tile::Empty {
-            is_start: false,
-            is_finish: false
-        };
-        height * width
-    ];
+#[derive(Copy, Clone, PartialEq)]
+enum Tile {
+    Empty,
+    Wall,
+    Start,
+    End,
+}
+fn get_system_time() -> std::time::SystemTime {
+    std::time::SystemTime::now()
+}
+fn generate_map(height: usize, width: usize) -> Map {
+    let mut tiles = vec![Tile::Wall; height * width];
+    let mut random_points: Vec<Vec2> = Vec::new();
+    //seed random number generator
+    //get the current system time as a seed, get_time() doesnt work because it is always the same
+    rand::srand(
+        get_system_time()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u64,
+    );
+    //generate random points spread throughout the map, each point will be a certain distance away from the next
+    let margin = 20;
+    for _ in 0..20 {
+        let x = rand::gen_range(margin, width - margin) as f32;
+        let y = rand::gen_range(margin, height - margin) as f32;
+        random_points.push(vec2(x, y));
+    }
+    let hull = convex_hull(&random_points);
+
+    tiles[0] = Tile::Start;
+    tiles[height * width - 1] = Tile::End;
+    let rasterized_coords = get_rasterized_circle_coords(5);
     let mut m = Map {
         height,
         width,
         tiles,
     };
-    generate_map(&mut m);
-    m
-}
-
-fn set_pixel(map: &mut Map, x: usize, y: usize, tile: Tile) {
-    map.tiles[y * map.width + x] = tile;
-}
-
-fn get_pixel(map: &Map, x: usize, y: usize) -> Tile {
-    map.tiles[y * map.width + x]
-}
-fn has_intersected_wall(racer: &Racer, map: &Map) -> bool {
-    return get_pixel(map, racer.pos_x as usize, racer.pos_y as usize) == Tile::Wall;
-}
-
-fn generate_map(map: &mut Map) {
-    let C0 = vec4(-1., 3., -3., 1.) * 0.5;
-    let C1 = vec4(2., -5., 4., -1.) * 0.5;
-    let C2 = vec4(-1., 0., 1., 0.) * 0.5;
-    let C3 = vec4(0., 2., 0., 0.) * 0.5;
-    //Step 1: Generate Random Points
-    let margin = 10_usize;
-    let N = 4;
-    let mut random_points: Vec<Vec2> = vec![];
-    let system_time = SystemTime::now();
-    rand::srand(
-        system_time
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_millis() as u64,
-    );
-    for quad_x in 0..N {
-        for quad_y in 0..N {
-            let x = rand::gen_range(
-                margin + quad_x * (map.width - 2 * margin) / N,
-                margin + (quad_x + 1) * (map.width - 2 * margin) / N,
-            );
-            let y = rand::gen_range(
-                margin + quad_y * (map.height - 2 * margin) / N,
-                margin + (quad_y + 1) * (map.height - 2 * margin) / N,
-            );
-            random_points.push(Vec2 {
-                x: x as f32,
-                y: y as f32,
-            });
-        }
-    }
-    let mut visited = vec![false; random_points.len()];
-    let mut ordered_points: Vec<Vec2> = vec![];
-    let mut curr = random_points[0];
-    visited[0] = true; //set the first point to visited
-    ordered_points.push(curr);
-    for _ in 0..N * N {
-        //do a linear search through all the remaining points to find the shortest distance
-        let (mut shortest, mut shortest_idx) = (f32::INFINITY, 0);
-        for (i, next) in random_points.iter().enumerate() {
-            if visited[i] {
+    let start_index_i = rand::gen_range(0, hull.len());
+    let start_index_t = rand::gen_range(0, 100_usize);
+    for i in 0..hull.len() {
+        let p0 = hull[i];
+        let p1 = hull[(i + 1) % hull.len()];
+        let m0 = vec2(
+            (p1.x - hull[(i + hull.len() - 1) % hull.len()].x) / 2.0,
+            (p1.y - hull[(i + hull.len() - 1) % hull.len()].y) / 2.0,
+        );
+        let m1 = vec2(
+            (hull[(i + 2) % hull.len()].x - p0.x) / 2.0,
+            (hull[(i + 2) % hull.len()].y - p0.y) / 2.0,
+        );
+        for t in 0..100 {
+            let p = hermite(p0, p1, m0, m1, t as f32 / 100.0);
+            let x = p.x.round() as usize;
+            let y = p.y.round() as usize;
+            if x >= width || y >= height {
                 continue;
             }
-            let dist = curr.distance(*next);
-            if dist < shortest {
-                shortest = dist;
-                shortest_idx = i;
+            set_circle(&mut m, x, y, &rasterized_coords, Tile::Empty);
+            if i != start_index_i || t != start_index_t {
+                continue;
             }
+            //place start
+            set_tile(&mut m, x as u32, y as u32, Tile::Start);
+            let p_next = hermite(p0, p1, m0, m1, (t+1) as f32 / 100.0);
+            let y_vel = y as f32 - p.y;
+            let x_vel = x as f32 - p.x;
+            ;
+
         }
-        ordered_points.push(random_points[shortest_idx]);
-        curr = random_points[shortest_idx];
-        visited[shortest_idx] = true;
     }
-    //testing set all points in ordered points to walls
-    // for(let i = 0; i < )
-    //TODO http://alvyray.com/Memos/CG/Pixar/spline77.pdf page 3
+
+    return m;
 }
 
-fn draw_map(map: &Map, width: f32) {
-    for y in 0..map.height {
-        for x in 0..map.width {
-            let color = match get_pixel(map, x, y) {
-                Tile::Empty {
-                    is_start,
-                    is_finish,
-                } => WHITE,
-                Tile::Wall => BLACK,
-            };
-            draw_rectangle(width * x as f32, width * y as f32, width, width, color);
+fn convex_hull(points: &[Vec2]) -> Vec<Vec2> {
+    //given a list of points, return a list of points that make up the convex hull
+    //gift wrapping algorithm
+
+    //sort points by x value
+    let mut points = points.to_vec();
+    points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
+    let mut hull: Vec<Vec2> = Vec::new();
+    let mut p = points[0];
+    let mut i = 0;
+    loop {
+        hull.push(p);
+        let mut q = points[(i + 1) % points.len()];
+        for j in 0..points.len() {
+            if orientation(p, points[j], q) == 2 {
+                q = points[j];
+            }
+        }
+        i = points.iter().position(|&x| x == q).unwrap();
+        p = q;
+        if p == hull[0] {
+            break;
         }
     }
+    return hull;
+}
+fn orientation(p: Vec2, q: Vec2, r: Vec2) -> i32 {
+    //given 3 points, return 0 if they are colinear, 1 if clockwise, 2 if counterclockwise
+    let val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+    if val == 0.0 {
+        return 0;
+    }
+    if val > 0.0 {
+        return 1;
+    }
+    return 2;
+}
+
+fn hermite(p0: Vec2, p1: Vec2, v0: Vec2, v1: Vec2, t: f32) -> Vec2 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let a = 2.0 * p0 - 2.0 * p1 + v0 + v1;
+    let b = -3.0 * p0 + 3.0 * p1 - 2.0 * v0 - v1;
+    let c = v0;
+    let d = p0;
+    a * t3 + b * t2 + c * t + d
+}
+
+fn draw_map(map: &Map) {
+    let tile_size = 5.0;
+    for (i, tile) in map.tiles.iter().enumerate() {
+        let x = (i % map.width) as f32 * tile_size;
+        let y = (i / map.width) as f32 * tile_size;
+        match tile {
+            Tile::Empty => {
+                draw_rectangle(x, y, tile_size, tile_size, WHITE);
+                //draw grid dot
+                draw_circle(x + tile_size / 2.0, y + tile_size / 2.0, 0.5, BLACK);
+            }
+            Tile::Wall => {
+                draw_rectangle(x, y, tile_size, tile_size, BLACK);
+            }
+            Tile::Start => {
+                draw_rectangle(x, y, tile_size, tile_size, GREEN);
+            }
+            Tile::End => {
+                draw_rectangle(x, y, tile_size, tile_size, RED);
+            }
+        }
+    }
+}
+
+fn set_circle(map: &mut Map, x: usize, y: usize, rasterized_coords: &Vec<Vec2>, tile: Tile) {
+    for coord in rasterized_coords {
+        for (a,b) in [(1, 1), (-1,1), (1, -1), (-1, -1)] {
+            let x = x as i32 + coord.x as i32 * a;
+            let y = y as i32 + coord.y as i32 * b;
+        if x < 0 || y < 0 || x >= map.width as i32 || y >= map.height as i32 {
+            continue;
+        }
+        if *get_tile(&map, x as u32, y as u32) == Tile::Start {
+            continue;
+        }
+        set_tile(map, x as u32, y as u32, tile);
+        }
+        
+    }
+}
+
+fn set_tile(map: &mut Map, x: u32, y: u32, tile: Tile) {
+    map.tiles[(y * map.width as u32 + x) as usize] = tile;
+}
+fn get_tile(map: &Map, x: u32, y: u32) -> &Tile {
+    &map.tiles[(y * map.width as u32 + x) as usize]
+}
+
+fn get_rasterized_circle_coords(radius: usize) -> Vec<Vec2> {
+    let mut coords = Vec::new();
+    for i in 0..radius {
+        for j in 0..radius {
+            if i * i + j * j < radius * radius {
+                coords.push(vec2(i as f32, j as f32));
+            }
+        }
+    }
+    return coords;
 }
 
 fn train_racers(population_size: u32) {
-    let map = new_map(100, 100);
+    let map = generate_map(100, 100);
     let racers = vec![Racer::new(); population_size as usize];
     let mut scores: Vec<i32> = racers.iter().map(|racer| test_racer(&map, racer)).collect();
 
