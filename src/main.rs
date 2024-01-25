@@ -119,9 +119,17 @@ fn generate_map(height: usize, width: usize) -> Map {
             //place start
             set_tile(&mut m, x as u32, y as u32, Tile::Start);
             let p_next = hermite(p0, p1, m0, m1, (t+1) as f32 / 100.0);
-            let y_vel = y as f32 - p.y;
-            let x_vel = x as f32 - p.x;
-            ;
+            let a = x as f32 - p.x;
+            let b = y as f32 - p.y;
+        
+            let c = -(1. - a*a/a*a+b*b).sqrt() * a.signum() * b.signum();
+            let d = (a*a/a*a+b*b).sqrt();
+            println!("a={} b={} c={} d={}", a, b,c, d);
+            for mult in 1..20 {
+                set_tile(&mut m, x as u32 + (c * mult as f32).round() as u32, y as u32 + (d * mult as f32).round() as u32, Tile::Start);
+            }
+            
+            
 
         }
     }
