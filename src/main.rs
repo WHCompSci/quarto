@@ -46,8 +46,6 @@ impl Racer {
     }
 }
 
-
-
 struct Map {
     height: usize,
     width: usize,
@@ -84,8 +82,6 @@ fn generate_map(height: usize, width: usize) -> Map {
     }
     let hull = convex_hull(&random_points);
 
-    tiles[0] = Tile::Start;
-    tiles[height * width - 1] = Tile::End;
     let rasterized_coords = get_rasterized_circle_coords(5);
     let mut m = Map {
         height,
@@ -117,20 +113,55 @@ fn generate_map(height: usize, width: usize) -> Map {
                 continue;
             }
             //place start
-            set_tile(&mut m, x as u32, y as u32, Tile::Start);
-            let p_next = hermite(p0, p1, m0, m1, (t+1) as f32 / 100.0);
-            let a = x as f32 - p.x;
-            let b = y as f32 - p.y;
-        
-            let c = -(1. - a*a/a*a+b*b).sqrt() * a.signum() * b.signum();
-            let d = (a*a/a*a+b*b).sqrt();
-            println!("a={} b={} c={} d={}", a, b,c, d);
-            for mult in 1..20 {
-                set_tile(&mut m, x as u32 + (c * mult as f32).round() as u32, y as u32 + (d * mult as f32).round() as u32, Tile::Start);
-            }
-            
-            
 
+            let p_next = hermite(p0, p1, m0, m1, (t + 1) as f32 / 100.0);
+            let a = p_next.x - p.x;
+            let b = p_next.y - p.y;
+
+            let c = -(1. - a * a / (a * a + b * b)).sqrt() * b.signum();
+            let d = (a * a / (a * a + b * b)).sqrt() * a.signum();
+            println!("a={} b={} c={} d={}", a, b, c, d);
+            let mut mag = 0.0;
+            loop {
+                let x_coord = x as i32 + (c * mag as f32).round() as i32;
+                let y_coord = y as i32 + (d * mag as f32).round() as i32;
+                if x_coord < 0
+                    || x_coord >= m.width as i32
+                    || y_coord < 0
+                    || y_coord >= m.width as i32
+                    || *get_tile(&m, x_coord as u32, y_coord as u32) == Tile::Wall
+                {
+                    break;
+                }
+                println!(
+                    "x-component={} y-component={}",
+                    (c * mag as f32),
+                    (d * mag as f32)
+                );
+                set_tile(&mut m, x_coord as u32, y_coord as u32, Tile::Start);
+                mag += 1.0;
+            }
+            mag = 0.0;
+            loop {
+                let x_coord = x as i32 + (c * mag as f32).round() as i32;
+                let y_coord = y as i32 + (d * mag as f32).round() as i32;
+                if x_coord < 0
+                    || x_coord >= m.width as i32
+                    || y_coord < 0
+                    || y_coord >= m.width as i32
+                    || *get_tile(&m, x_coord as u32, y_coord as u32) == Tile::Wall
+                {
+                    break;
+                }
+                println!(
+                    "x-component={} y-component={}",
+                    (c * mag as f32),
+                    (d * mag as f32)
+                );
+                set_tile(&mut m, x_coord as u32, y_coord as u32, Tile::Start);
+                mag -= 1.0;
+            }
+            //set_tile(&mut m, x as u32, y as u32, Tile::End);
         }
     }
 
@@ -211,18 +242,18 @@ fn draw_map(map: &Map) {
 
 fn set_circle(map: &mut Map, x: usize, y: usize, rasterized_coords: &Vec<Vec2>, tile: Tile) {
     for coord in rasterized_coords {
-        for (a,b) in [(1, 1), (-1,1), (1, -1), (-1, -1)] {
+        for (a, b) in [(1, 1), (-1, 1), (1, -1), (-1, -1)] {
             let x = x as i32 + coord.x as i32 * a;
             let y = y as i32 + coord.y as i32 * b;
-        if x < 0 || y < 0 || x >= map.width as i32 || y >= map.height as i32 {
-            continue;
+            if x < 0 || y < 0 || x >= map.width as i32 || y >= map.height as i32 {
+                continue;
+            }
+            let curr_tile = *get_tile(&map, x as u32, y as u32);
+            if curr_tile == Tile::Start || curr_tile == Tile::End {
+                continue;
+            }
+            set_tile(map, x as u32, y as u32, tile);
         }
-        if *get_tile(&map, x as u32, y as u32) == Tile::Start {
-            continue;
-        }
-        set_tile(map, x as u32, y as u32, tile);
-        }
-        
     }
 }
 
@@ -249,7 +280,6 @@ fn train_racers(population_size: u32) {
     let map = generate_map(100, 100);
     let racers = vec![Racer::new(); population_size as usize];
     let mut scores: Vec<i32> = racers.iter().map(|racer| test_racer(&map, racer)).collect();
-
 }
 
 fn test_racer(map: &Map, racer: &Racer) -> i32 {
