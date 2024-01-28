@@ -88,7 +88,7 @@ fn generate_map(height: usize, width: usize) -> Map {
         tiles,
     };
 
-    let (p0, p1, m0, m1, t, p, x, y) = fun_name(hull, width, height, &mut m).unwrap();
+    let (p0, p1, m0, m1, t, p, x, y) = carve_out_path(hull, width, height, &mut m).unwrap();
 
     //place start
 
@@ -137,7 +137,7 @@ fn generate_map(height: usize, width: usize) -> Map {
     //set_tile(&mut m, x as u32, y as u32, Tile::End);
 }
 
-fn fun_name(
+fn carve_out_path(
     hull: Vec<Vec2>,
     width: usize,
     height: usize,
