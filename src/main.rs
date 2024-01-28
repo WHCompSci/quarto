@@ -58,6 +58,7 @@ enum Tile {
     Wall,
     Start,
     End,
+    Barrier,
 }
 fn get_system_time() -> std::time::SystemTime {
     std::time::SystemTime::now()
@@ -81,13 +82,69 @@ fn generate_map(height: usize, width: usize) -> Map {
         random_points.push(vec2(x, y));
     }
     let hull = convex_hull(&random_points);
-
-    let rasterized_coords = get_rasterized_circle_coords(5);
     let mut m = Map {
         height,
         width,
         tiles,
     };
+
+    let (p0, p1, m0, m1, t, p, x, y) = fun_name(hull, width, height, &mut m).unwrap();
+
+    //place start
+
+    let p_next = hermite(p0, p1, m0, m1, (t + 1) as f32 / 100.0);
+    let a = p_next.x - p.x;
+    let b = p_next.y - p.y;
+
+    let c = -(1. - a * a / (a * a + b * b)).sqrt() * b.signum();
+    let d = (a * a / (a * a + b * b)).sqrt() * a.signum();
+
+    let a_dir = if a.abs() > b.abs() {a.signum() as i32} else {0};
+    let b_dir = if a.abs() > b.abs() {0} else {b.signum() as i32};
+    let mut mag = 0.0;
+    for inc in [-1.0, 1.0] {
+        loop {
+            let x_coord = x as i32 + (c * mag as f32).round() as i32;
+            let y_coord = y as i32 + (d * mag as f32).round() as i32;
+            if x_coord < 0
+                || x_coord >= m.width as i32
+                || y_coord < 0
+                || y_coord >= m.width as i32
+                || *get_tile(&m, x_coord as u32, y_coord as u32) == Tile::Wall
+            {
+                break;
+            }
+            set_tile(&mut m, x_coord as u32, y_coord as u32, Tile::Barrier);
+            set_tile(
+                &mut m,
+                (x_coord + a_dir) as u32,
+                (y_coord + b_dir) as u32,
+                Tile::Start,
+            );
+            set_tile(
+                &mut m,
+                (x_coord - a_dir) as u32,
+                (y_coord - b_dir) as u32,
+                Tile::End,
+            );
+
+            mag += inc;
+        }
+        mag = 0.0;
+    }
+
+    m
+    //set_tile(&mut m, x as u32, y as u32, Tile::End);
+}
+
+fn fun_name(
+    hull: Vec<Vec2>,
+    width: usize,
+    height: usize,
+    m: &mut Map,
+) -> Option<(Vec2, Vec2, Vec2, Vec2, usize, Vec2, usize, usize)> {
+    let rasterized_coords = get_rasterized_circle_coords(5);
+    let mut out = None;
     let start_index_i = rand::gen_range(0, hull.len());
     let start_index_t = rand::gen_range(0, 100_usize);
     for i in 0..hull.len() {
@@ -108,64 +165,13 @@ fn generate_map(height: usize, width: usize) -> Map {
             if x >= width || y >= height {
                 continue;
             }
-            set_circle(&mut m, x, y, &rasterized_coords, Tile::Empty);
-            if i != start_index_i || t != start_index_t {
-                continue;
+            set_circle(m, x, y, &rasterized_coords, Tile::Empty);
+            if i == start_index_i && t != start_index_t {
+                out = Some((p0, p1, m0, m1, t, p, x, y));
             }
-            //place start
-
-            let p_next = hermite(p0, p1, m0, m1, (t + 1) as f32 / 100.0);
-            let a = p_next.x - p.x;
-            let b = p_next.y - p.y;
-
-            let c = -(1. - a * a / (a * a + b * b)).sqrt() * b.signum();
-            let d = (a * a / (a * a + b * b)).sqrt() * a.signum();
-            println!("a={} b={} c={} d={}", a, b, c, d);
-            let mut mag = 0.0;
-            loop {
-                let x_coord = x as i32 + (c * mag as f32).round() as i32;
-                let y_coord = y as i32 + (d * mag as f32).round() as i32;
-                if x_coord < 0
-                    || x_coord >= m.width as i32
-                    || y_coord < 0
-                    || y_coord >= m.width as i32
-                    || *get_tile(&m, x_coord as u32, y_coord as u32) == Tile::Wall
-                {
-                    break;
-                }
-                println!(
-                    "x-component={} y-component={}",
-                    (c * mag as f32),
-                    (d * mag as f32)
-                );
-                set_tile(&mut m, x_coord as u32, y_coord as u32, Tile::Start);
-                mag += 1.0;
-            }
-            mag = 0.0;
-            loop {
-                let x_coord = x as i32 + (c * mag as f32).round() as i32;
-                let y_coord = y as i32 + (d * mag as f32).round() as i32;
-                if x_coord < 0
-                    || x_coord >= m.width as i32
-                    || y_coord < 0
-                    || y_coord >= m.width as i32
-                    || *get_tile(&m, x_coord as u32, y_coord as u32) == Tile::Wall
-                {
-                    break;
-                }
-                println!(
-                    "x-component={} y-component={}",
-                    (c * mag as f32),
-                    (d * mag as f32)
-                );
-                set_tile(&mut m, x_coord as u32, y_coord as u32, Tile::Start);
-                mag -= 1.0;
-            }
-            //set_tile(&mut m, x as u32, y as u32, Tile::End);
         }
     }
-
-    return m;
+    out
 }
 
 fn convex_hull(points: &[Vec2]) -> Vec<Vec2> {
@@ -227,7 +233,7 @@ fn draw_map(map: &Map) {
                 //draw grid dot
                 draw_circle(x + tile_size / 2.0, y + tile_size / 2.0, 0.5, BLACK);
             }
-            Tile::Wall => {
+            Tile::Wall | Tile::Barrier => {
                 draw_rectangle(x, y, tile_size, tile_size, BLACK);
             }
             Tile::Start => {
@@ -249,10 +255,9 @@ fn set_circle(map: &mut Map, x: usize, y: usize, rasterized_coords: &Vec<Vec2>, 
                 continue;
             }
             let curr_tile = *get_tile(&map, x as u32, y as u32);
-            if curr_tile == Tile::Start || curr_tile == Tile::End {
-                continue;
+            if curr_tile == Tile::Wall || curr_tile == Tile::Empty {
+                set_tile(map, x as u32, y as u32, tile);
             }
-            set_tile(map, x as u32, y as u32, tile);
         }
     }
 }
