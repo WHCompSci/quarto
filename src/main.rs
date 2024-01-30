@@ -1,21 +1,69 @@
-use macroquad::prelude::*;
+use macroquad::math::{vec2, Vec2};
+use macroquad::prelude::Color;
+use macroquad::{color_u8, prelude as mq};
 use neural_net::NeuralNet;
+use rand::seq::SliceRandom;
+use rand::Rng;
 use std::time::UNIX_EPOCH;
+const PX_SIZE: f32 = 8.0;
 mod neural_net;
 use std::f64::consts::FRAC_PI_2;
 
 #[macroquad::main("Racetrack Generator")]
 async fn main() {
-    let mut map = generate_map(100, 100);
-
-    loop {
-        clear_background(BLACK);
+    let population_size = 100;
+    let num_generations = 100_000;
+    let map = generate_map(100, 100);
+    let mut racers = vec![Racer::new(); population_size as usize];
+    let mut rng = rand::thread_rng();
+    for generation in 0..num_generations {
+        mq::clear_background(mq::BLACK);
         draw_map(&map);
-        next_frame().await
+        for racer in racers.iter_mut() {
+            racer.score = test_racer(&map, racer);
+        }
+        println!(
+            "Finished testing racers scores for generation: {}, Average Score={}",
+            generation, 
+            racers.iter().map(|racer| racer.score).sum::<i32>() as f32 / population_size as f32
+        );
+        //print scores
+        for racer in racers.iter() {
+            //print network weights avg
+        }
+        let mut new_racers = Vec::new();
+        for _ in 0..population_size {
+            
+            let mut parent1 = racers
+                .choose_weighted(&mut rng, |racer| racer.score)
+                .unwrap()
+                .clone();
+            let mut parent2 = racers
+                .choose_weighted(&mut rng, |racer| racer.score)
+                .unwrap()
+                .clone();
+            let mut child = Racer::new();
+            child.brain = NeuralNet::crossover(&mut parent1.brain, &mut parent2.brain);
+            child.brain.mutate(0.01);
+            new_racers.push(child);
+        }
+        //add the best racer from the previous generation
+        let best_racer = racers.iter().max_by(|a, b| a.score.cmp(&b.score)).unwrap().clone();
+        racers = new_racers;
+        
+        racers[0] = best_racer.clone();
+        racers[0].brain.mutate(0.0001);
+        racers[1] = best_racer.clone();
+        mq::next_frame().await
     }
+    // loop {
+    //     mq::clear_background(mq::BLACK);
+
+    //     mq::next_frame().await
+    // }
 }
-const RACER_NUM_RAYS: usize = 3;
-const RACER_FOV_ANGLE: f64 = FRAC_PI_2;
+const RACER_NUM_RAYS: usize = 4;
+const RACER_FOV_ANGLE: f32 = FRAC_PI_2 as f32;
 #[derive(Debug, Clone)]
 pub struct Racer {
     brain: NeuralNet,
@@ -23,13 +71,13 @@ pub struct Racer {
     pos_y: u32,
     vel_x: i32,
     vel_y: i32,
-    score: Option<f64>,
+    score: i32,
 }
 
 impl Racer {
     fn new() -> Self {
-        let num_input_nodes = RACER_NUM_RAYS;
-        let num_hidden_layers = 10;
+        let num_input_nodes = RACER_NUM_RAYS + 2;
+        let num_hidden_layers = 2;
         let mut layer_widths = Vec::new();
         // add the width of the input layer
         layer_widths.push(num_input_nodes);
@@ -41,7 +89,7 @@ impl Racer {
             pos_y: 0,
             vel_x: 0,
             vel_y: 0,
-            score: None,
+            score: 0,
         }
     }
 }
@@ -50,6 +98,10 @@ struct Map {
     height: usize,
     width: usize,
     tiles: Vec<Tile>,
+    tile_distances: Vec<u32>,
+    start_tiles: Vec<(usize, usize)>,
+    end_tiles: Vec<(usize, usize)>,
+    starting_vec: Vec2,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -58,7 +110,6 @@ enum Tile {
     Wall,
     Start,
     End,
-    Barrier,
 }
 fn get_system_time() -> std::time::SystemTime {
     std::time::SystemTime::now()
@@ -68,7 +119,7 @@ fn generate_map(height: usize, width: usize) -> Map {
     let mut random_points: Vec<Vec2> = Vec::new();
     //seed random number generator
     //get the current system time as a seed, get_time() doesnt work because it is always the same
-    rand::srand(
+    mq::rand::srand(
         get_system_time()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -77,8 +128,8 @@ fn generate_map(height: usize, width: usize) -> Map {
     //generate random points spread throughout the map, each point will be a certain distance away from the next
     let margin = 20;
     for _ in 0..20 {
-        let x = rand::gen_range(margin, width - margin) as f32;
-        let y = rand::gen_range(margin, height - margin) as f32;
+        let x = mq::rand::gen_range(margin, width - margin) as f32;
+        let y = mq::rand::gen_range(margin, height - margin) as f32;
         random_points.push(vec2(x, y));
     }
     let hull = convex_hull(&random_points);
@@ -86,6 +137,10 @@ fn generate_map(height: usize, width: usize) -> Map {
         height,
         width,
         tiles,
+        tile_distances: vec![0; height * width],
+        start_tiles: Vec::new(),
+        end_tiles: Vec::new(),
+        starting_vec: vec2(0.0, 0.0),
     };
 
     let (p0, p1, m0, m1, t, p, x, y) = carve_out_path(hull, width, height, &mut m).unwrap();
@@ -99,10 +154,20 @@ fn generate_map(height: usize, width: usize) -> Map {
     let c = -(1. - a * a / (a * a + b * b)).sqrt() * b.signum();
     let d = (a * a / (a * a + b * b)).sqrt() * a.signum();
 
-    let a_dir = if a.abs() > b.abs() {a.signum() as i32} else {0};
-    let b_dir = if a.abs() > b.abs() {0} else {b.signum() as i32};
-    let mut mag = 0.0;
+    let starting_vec_x = if a.abs() > b.abs() {
+        a.signum() as i32
+    } else {
+        0
+    };
+    let starting_vec_y = if a.abs() > b.abs() {
+        0
+    } else {
+        b.signum() as i32
+    };
+    m.starting_vec = vec2(starting_vec_x as f32, starting_vec_y as f32);
+    
     for inc in [-1.0, 1.0] {
+        let mut mag = inc;
         loop {
             let x_coord = x as i32 + (c * mag as f32).round() as i32;
             let y_coord = y as i32 + (d * mag as f32).round() as i32;
@@ -114,26 +179,63 @@ fn generate_map(height: usize, width: usize) -> Map {
             {
                 break;
             }
-            set_tile(&mut m, x_coord as u32, y_coord as u32, Tile::Barrier);
+            set_tile(&mut m, x_coord as u32, y_coord as u32, Tile::Wall);
             set_tile(
                 &mut m,
-                (x_coord + a_dir) as u32,
-                (y_coord + b_dir) as u32,
+                (x_coord + starting_vec_x) as u32,
+                (y_coord + starting_vec_y) as u32,
                 Tile::Start,
             );
+            m.start_tiles.push((
+                (x_coord + starting_vec_x) as usize,
+                (y_coord + starting_vec_y) as usize,
+            ));
             set_tile(
                 &mut m,
-                (x_coord - a_dir) as u32,
-                (y_coord - b_dir) as u32,
+                (x_coord - starting_vec_x) as u32,
+                (y_coord - starting_vec_y) as u32,
+                Tile::Wall,
+            );
+            set_tile(
+                &mut m,
+                (x_coord - 2*starting_vec_x) as u32,
+                (y_coord - 2*starting_vec_y) as u32,
                 Tile::End,
             );
+            m.end_tiles.push((
+                (x_coord - 2*starting_vec_x) as usize,
+                (y_coord - 2*starting_vec_y) as usize,
+            ));
 
             mag += inc;
         }
-        mag = 0.0;
+        set_tile(&mut m,  x as u32, y as u32, Tile::Wall);
+            set_tile(
+                &mut m,
+                (x as i32 + starting_vec_x) as u32,
+                (y as i32 + starting_vec_y) as u32,
+                Tile::Start,
+            );
+            m.start_tiles.push((
+                (x as i32 + starting_vec_x) as usize,
+                (y as i32 + starting_vec_y) as usize,
+            ));
+            set_tile(
+                &mut m,
+                (x as i32 - starting_vec_x) as u32,
+                (y as i32 - starting_vec_y) as u32,
+                Tile::End,
+            );
+            m.end_tiles.push((
+                (x as i32 - 2*starting_vec_x) as usize,
+                (x as i32 - 2*starting_vec_y) as usize,
+            ));
     }
-
+    find_distances(&mut m);
+    println!("distances: {:?}", m.tile_distances);
     m
+    //set tile distances using BFS
+
     //set_tile(&mut m, x as u32, y as u32, Tile::End);
 }
 
@@ -145,8 +247,8 @@ fn carve_out_path(
 ) -> Option<(Vec2, Vec2, Vec2, Vec2, usize, Vec2, usize, usize)> {
     let rasterized_coords = get_rasterized_circle_coords(5);
     let mut out = None;
-    let start_index_i = rand::gen_range(0, hull.len());
-    let start_index_t = rand::gen_range(0, 100_usize);
+    let start_index_i = mq::rand::gen_range(0, hull.len());
+    let start_index_t = mq::rand::gen_range(0, 100_usize);
     for i in 0..hull.len() {
         let p0 = hull[i];
         let p1 = hull[(i + 1) % hull.len()];
@@ -222,25 +324,59 @@ fn hermite(p0: Vec2, p1: Vec2, v0: Vec2, v1: Vec2, t: f32) -> Vec2 {
     a * t3 + b * t2 + c * t + d
 }
 
+fn find_distances(m: &mut Map) {
+    let mut queue: Vec<(usize, usize)> = Vec::new();
+    let mut visited: Vec<bool> = vec![false; m.width * m.height];
+    for (x, y) in m.start_tiles.iter() {
+        queue.push((*x, *y));
+        visited[y * m.width + x] = true;
+    }
+    while !queue.is_empty() {
+        let (x, y) = queue.remove(0);
+        let curr_dist = m.tile_distances[y * m.width + x];
+        for (a, b) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let x = x as i32 + a;
+            let y = y as i32 + b;
+            if x < 0
+                || y < 0
+                || x >= m.width as i32
+                || y >= m.height as i32
+                || visited[y as usize * m.width + x as usize]
+                || m.tiles[y as usize * m.width + x as usize] == Tile::Wall
+            {
+                continue;
+            }
+            visited[y as usize * m.width + x as usize] = true;
+            m.tile_distances[y as usize * m.width + x as usize] = curr_dist + 1;
+            queue.push((x as usize, y as usize));
+        }
+    }
+    //subtract all distances from the max distance in the array
+    // let max_dist = m.tile_distances.iter().max().unwrap().clone();
+    // for dist in m.tile_distances.iter_mut() {
+    //     *dist = max_dist - *dist;
+    // }
+}
+
 fn draw_map(map: &Map) {
-    let tile_size = 5.0;
+    let tile_size = PX_SIZE;
     for (i, tile) in map.tiles.iter().enumerate() {
         let x = (i % map.width) as f32 * tile_size;
         let y = (i / map.width) as f32 * tile_size;
         match tile {
             Tile::Empty => {
-                draw_rectangle(x, y, tile_size, tile_size, WHITE);
+                mq::draw_rectangle(x, y, tile_size, tile_size, mq::WHITE);
                 //draw grid dot
-                draw_circle(x + tile_size / 2.0, y + tile_size / 2.0, 0.5, BLACK);
+                mq::draw_circle(x + tile_size / 2.0, y + tile_size / 2.0, 0.5, color_u8!(map.tile_distances[i] as u8,  24, 255, 255));
             }
-            Tile::Wall | Tile::Barrier => {
-                draw_rectangle(x, y, tile_size, tile_size, BLACK);
+            Tile::Wall => {
+                mq::draw_rectangle(x, y, tile_size, tile_size, mq::BLACK);
             }
             Tile::Start => {
-                draw_rectangle(x, y, tile_size, tile_size, GREEN);
+                mq::draw_rectangle(x, y, tile_size, tile_size, mq::GREEN);
             }
             Tile::End => {
-                draw_rectangle(x, y, tile_size, tile_size, RED);
+                mq::draw_rectangle(x, y, tile_size, tile_size, mq::RED);
             }
         }
     }
@@ -281,12 +417,177 @@ fn get_rasterized_circle_coords(radius: usize) -> Vec<Vec2> {
     return coords;
 }
 
-fn train_racers(population_size: u32) {
+fn train_racers(population_size: u32) -> Vec<Racer> {
+    //genetic algorithm
     let map = generate_map(100, 100);
-    let racers = vec![Racer::new(); population_size as usize];
-    let mut scores: Vec<i32> = racers.iter().map(|racer| test_racer(&map, racer)).collect();
+    let mut racers = vec![Racer::new(); population_size as usize];
+    let mut rng = rand::thread_rng();
+    for _ in 0..100 {
+        mq::clear_background(mq::BLACK);
+        for racer in racers.iter_mut() {
+            racer.score = test_racer(&map, racer);
+        }
+        let mut new_racers = Vec::new();
+        for _ in 0..population_size {
+            let mut parent1 = racers
+                .choose_weighted(&mut rng, |racer| racer.score)
+                .unwrap()
+                .clone();
+            let mut parent2 = racers
+                .choose_weighted(&mut rng, |racer| racer.score)
+                .unwrap()
+                .clone();
+            let mut child = Racer::new();
+            child.brain = NeuralNet::crossover(&mut parent1.brain, &mut parent2.brain);
+            child.brain.mutate(0.1);
+            new_racers.push(child);
+        }
+        racers = new_racers;
+    }
+    racers
 }
 
-fn test_racer(map: &Map, racer: &Racer) -> i32 {
-    unimplemented!()
+fn test_racer(map: &Map, racer: &mut Racer) -> i32 {
+    let angle_between_rays = RACER_FOV_ANGLE / RACER_NUM_RAYS as f32;
+    let ray_angles = (1..=RACER_NUM_RAYS)
+        .map(|x| x as f32 * angle_between_rays - RACER_FOV_ANGLE / 2.0)
+        .collect::<Vec<f32>>();
+    //given a map and a racer, return the score of the racer
+    //score is determined by how far the racer gets before hitting a wall
+    let mut score = 0;
+    //racer starts on a random start tile
+    // let mut rng = rand::thread_rng();
+    // let start_tile = map.start_tiles.choose(&mut rng).unwrap();
+    let start_tile = map.start_tiles[0];
+    racer.pos_x = start_tile.0 as u32;
+    racer.pos_y = start_tile.1 as u32;
+
+    racer.vel_x = 2 * map.starting_vec.x as i32;
+    racer.vel_y = 2 * map.starting_vec.y as i32;
+    let mut score_bonus = 0;
+    let mut curr_tile = get_tile(map, racer.pos_x, racer.pos_y);
+    while *curr_tile != Tile::End {
+        if racer.pos_x as i32 + racer.vel_x < 0
+            || racer.pos_x as i32 + racer.vel_x >= map.width as i32
+            || racer.pos_y as i32 + racer.vel_y < 0
+            || racer.pos_y as i32 + racer.vel_y >= map.height as i32
+        {
+            println!("I went out of bounds! my v was {}, {}", racer.vel_x, racer.vel_y);
+            return score + score_bonus;
+        }
+        //if the racer goes to a lower tile distance then before (it is going backwards), kill the racer!!!
+
+        let curr_dist = map.tile_distances[racer.pos_y as usize * map.width + racer.pos_x as usize];
+        let next_dist = map.tile_distances[(racer.pos_y as i32 + racer.vel_y) as usize * map.width + (racer.pos_x as i32 + racer.vel_x) as usize];
+        if next_dist < curr_dist
+        {
+            println!("I went backwards! my v was {}, {}", racer.vel_x, racer.vel_y);
+            return score + score_bonus;
+        }
+        let vel_mag = ((racer.vel_x * racer.vel_x + racer.vel_y * racer.vel_y) as f32).sqrt() as usize;
+        let vel_x_norm = racer.vel_x as f32 / vel_mag as f32;
+        let vel_y_norm = racer.vel_y as f32 / vel_mag as f32;
+        for mag in 1..=vel_mag+1 {
+            let x =  (mag as f32 * vel_x_norm) as i32;
+            let y =  (mag as f32 * vel_y_norm) as i32;
+            //if the ray intersects a wall, kill the racer!!! (break out of the loop)
+            let tile = *get_tile(
+                map,
+                (racer.pos_x as i32 + x) as u32,
+                (racer.pos_y as i32 + y) as u32,
+            );
+            if tile == Tile::End {
+                println!("I made it to the end! my v was {}, {}", racer.vel_x, racer.vel_y);
+                return score + score_bonus;
+            }
+            if tile == Tile::Wall
+            {
+                // println!("My velocity ray hit a wall! my v was {}, {}", racer.vel_x, racer.vel_y);
+                return score + score_bonus;
+                
+            }
+            
+        }
+        
+        mq::draw_circle(
+            racer.pos_x as f32 * PX_SIZE + 0.5 * PX_SIZE,
+            racer.pos_y as f32 * PX_SIZE + 0.5 * PX_SIZE,
+            0.5 * PX_SIZE,
+            mq::BLUE,
+        );
+        //draw velocity vector
+        mq::draw_line(
+            racer.pos_x as f32 * PX_SIZE + 0.5 * PX_SIZE,
+            racer.pos_y as f32 * PX_SIZE + 0.5 * PX_SIZE,
+            (racer.pos_x as i32 + racer.vel_x) as f32 * PX_SIZE + 0.5 * PX_SIZE,
+            (racer.pos_y as i32 + racer.vel_y) as f32 * PX_SIZE + 0.5 * PX_SIZE,
+            1.0,
+            mq::RED,
+        );
+        racer.pos_x = (racer.pos_x as i32 + racer.vel_x) as u32;
+        racer.pos_y = (racer.pos_y as i32 + racer.vel_y) as u32;
+        curr_tile = get_tile(map, racer.pos_x, racer.pos_y);
+        //prompt racer to make a decision
+        let mut inputs = Vec::new();
+        for angle in ray_angles.iter() {
+            let mut x = racer.pos_x as f32;
+            let mut y = racer.pos_y as f32;
+
+            let mut dist = 0;
+            loop {
+                x += angle.cos();
+                y += angle.sin();
+                if x < 0.0
+                    || y < 0.0
+                    || x >= map.width as f32
+                    || y >= map.height as f32
+                    || *get_tile(map, x.floor() as u32, y.floor() as u32) == Tile::Wall
+                   
+                {
+                    
+                    break;
+                }
+                dist += 1;
+            
+            }
+            inputs.push(dist as f64);
+            //add velocity to input
+        }
+        inputs.push(racer.vel_x as f64);
+        inputs.push(racer.vel_y as f64);
+        let outputs = racer.brain.feed_forward(inputs);
+        let max_index = outputs
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .unwrap()
+            .0;
+        // print!("mi={:?} ", outputs);
+        // println!("weights: {:?}", &racer.brain.get_weights());
+        // println!("biases: {:?}", &racer.brain.get_biases());
+        // println!("layers: {:?}", &racer.brain.get_layers());
+        let accel = match max_index {
+            0 => (-1, -1),
+            1 => (0, -1),
+            2 => (1, -1),
+            3 => (-1, 0),
+            4 => (0, 0),
+            5 => (1, 0),
+            6 => (-1, 1),
+            7 => (0, 1),
+            8 => (1, 1),
+            _ => panic!("Invalid output"),
+        };
+        //if velocity and acceleration are both 0, kill the racer!!!
+        if racer.vel_x == 0 && racer.vel_y == 0 {
+            // println!("I stopped moving! my v was {}, {}", racer.vel_x, racer.vel_y);
+            return score + score_bonus;
+        }
+        racer.vel_x += accel.0;
+        racer.vel_y += accel.1;
+        score = map.tile_distances[racer.pos_y as usize * map.width + racer.pos_x as usize] as i32;
+        score_bonus+=0;
+    }
+    println!("Made it to the end!");
+    score + score_bonus
 }

@@ -7,6 +7,7 @@ pub struct NeuralNet {
     weights_widths: Vec<usize>,
     layers: Vec<Vec<f64>>,
     weights: Vec<Vec<f64>>,
+    biases: Vec<Vec<f64>>,
 }
 
 impl NeuralNet {
@@ -21,43 +22,103 @@ impl NeuralNet {
         }
         let weights: Vec<Vec<f64>> = weights_widths
             .iter()
-            .map(|width| vec![(); *width].iter().map(|_| thread_rng().gen_range(0.0..1.0)).collect())
+            .map(|width| vec![(); *width].iter().map(|_| thread_rng().gen_range(-1.0..1.0)).collect())
+            .collect();
+        let biases: Vec<Vec<f64>> = layers_widths
+            .iter()
+            .map(|width| vec![(); *width].iter().map(|_| thread_rng().gen_range(-1.0..1.0)).collect())
             .collect();
         NeuralNet {
             layers_widths,
             weights_widths,
             layers,
             weights,
+            biases
         }
     }
-    pub fn run(&mut self, layer_inputs: Vec<f64>) -> Result<&Vec<f64>, ()> {
-        match layer_inputs {
-            inputs if inputs.len() != self.layers_widths[0] => Err(()),
-            inputs => {
-                self.layers[0] = inputs; // set the input layer
-                for i in 1..self.layers.len() {
-                    // for every layer after the input layer, we want to set all the nodes in the next node layer
-                    // based on the weights and the nodes from the previous layer
-                    for j in 0..self.layers_widths[i] {
-                        for k in 0..self.layers_widths[i - 1] {
-                            //add the last (node * weight)
-                            let prev_node = self.layers[i - 1][k];
-                            let weight = self.weights[i][j * self.layers_widths[i - 1] + k];
-                            self.layers[i][j] += prev_node * weight;
-                        }
-                        //do activation function
-                        self.layers[i][j] = relu(self.layers[i][j])
-                    }
+    pub fn feed_forward(&mut self, layer_inputs: Vec<f64>) -> &Vec<f64> {
+        assert_eq!(layer_inputs.len(), self.layers_widths[0]);
+           
+            
+        self.layers[0] = layer_inputs; // set the input layer
+        for i in 1..self.layers.len() - 1 {
+            // for every layer after the input layer, we want to set all the nodes in the next node layer
+            // based on the weights and the nodes from the previous layer
+            for j in 0..self.layers_widths[i] {
+                for k in 0..self.layers_widths[i - 1] {
+                    //add the last (node * weight)
+                    let prev_node = self.layers[i - 1][k];
+                    let weight = self.weights[i][j * self.layers_widths[i - 1] + k];
+                    self.layers[i][j] += prev_node * weight;
                 }
-                Ok(self.layers.last().unwrap())
+                //do activation function
+                self.layers[i][j] = tanh(self.layers[i][j] + self.biases[i][j])
             }
         }
+        &self.layers[self.layers.len() - 2]
+        
+        
+    }
+    pub fn mutate(&mut self, mutation_rate: f64) {
+        for i in 0..self.weights.len() {
+            for j in 0..self.weights[i].len() {
+                if thread_rng().gen_range(0.0..1.0) < mutation_rate {
+                    self.weights[i][j] = thread_rng().gen_range(-1.0..1.0);
+                }
+                
+            }
+        }
+        for i in 0..self.biases.len() {
+            for j in 0..self.biases[i].len() {
+                if thread_rng().gen_range(0.0..1.0) < mutation_rate {
+                    self.biases[i][j] = thread_rng().gen_range(-1.0..1.0);
+                }
+            }
+        }
+    }
+    pub fn crossover(network_a: &NeuralNet, network_b: &NeuralNet) -> NeuralNet {
+        assert_eq!(network_a.layers_widths, network_b.layers_widths);
+        let mut new_network = NeuralNet::new(network_a.layers_widths.clone());
+        for i in 0..network_a.weights.len() {
+            for j in 0..network_a.weights[i].len() {
+                new_network.weights[i][j] = if thread_rng().gen_range(0.0..1.0) < 0.5 {
+                    network_a.weights[i][j]
+                } else {
+                    network_b.weights[i][j]
+                };
+            }
+        }
+        for i in 0..network_a.biases.len() {
+            for j in 0..network_a.biases[i].len() {
+                new_network.biases[i][j] = if thread_rng().gen_range(0.0..1.0) < 0.5 {
+                    network_a.biases[i][j]
+                } else {
+                    network_b.biases[i][j]
+                };
+            }
+        }
+        new_network
+    }
+    pub fn get_weights(&self) -> &Vec<Vec<f64>> {
+        &self.weights
+    }
+    pub fn get_biases(&self) -> &Vec<Vec<f64>> {
+        &self.biases
+    }
+    pub fn get_layers(&self) -> &Vec<Vec<f64>> {
+        &self.layers
     }
 }
 
 #[inline(always)]
 fn relu(x: f64) -> f64 {
     x.max(0.0)
+}
+fn sigmoid(x: f64) -> f64 {
+    1.0 / (1.0 + (-x).exp())
+}
+fn tanh(x: f64) -> f64 {
+    x.tanh()
 }
 
 
