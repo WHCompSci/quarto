@@ -41,21 +41,21 @@ impl NeuralNet {
            
             
         self.layers[0] = layer_inputs; // set the input layer
-        for i in 1..self.layers.len() - 1 {
+        for i in 1..self.layers.len() {
             // for every layer after the input layer, we want to set all the nodes in the next node layer
             // based on the weights and the nodes from the previous layer
             for j in 0..self.layers_widths[i] {
                 for k in 0..self.layers_widths[i - 1] {
                     //add the last (node * weight)
                     let prev_node = self.layers[i - 1][k];
-                    let weight = self.weights[i][j * self.layers_widths[i - 1] + k];
+                    let weight = self.weights[i - 1][j * self.layers_widths[i - 1] + k];
                     self.layers[i][j] += prev_node * weight;
                 }
                 //do activation function
                 self.layers[i][j] = tanh(self.layers[i][j] + self.biases[i][j])
             }
         }
-        &self.layers[self.layers.len() - 2]
+        &self.layers[self.layers.len() - 1]
         
         
     }
@@ -63,7 +63,7 @@ impl NeuralNet {
         for i in 0..self.weights.len() {
             for j in 0..self.weights[i].len() {
                 if thread_rng().gen_range(0.0..1.0) < mutation_rate {
-                    self.weights[i][j] = thread_rng().gen_range(-1.0..1.0);
+                    self.weights[i][j] += thread_rng().gen_range(-0.25..0.25);
                 }
                 
             }
@@ -71,7 +71,7 @@ impl NeuralNet {
         for i in 0..self.biases.len() {
             for j in 0..self.biases[i].len() {
                 if thread_rng().gen_range(0.0..1.0) < mutation_rate {
-                    self.biases[i][j] = thread_rng().gen_range(-1.0..1.0);
+                    self.biases[i][j] += thread_rng().gen_range(-0.25..0.25);
                 }
             }
         }
