@@ -10,7 +10,7 @@ macroquad = "0.4.4"
 rand = "0.8.5"
 
 [profile.dev]
-opt-level = 0
+opt-level = 1
 
 [profile.release]
 opt-level = 3
